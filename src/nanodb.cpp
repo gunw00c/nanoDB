@@ -3,6 +3,8 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <set>
+#include <numeric>
 
 namespace nanodb {
 
@@ -35,7 +37,7 @@ int NanoDB::findColumnIndex(const Table& table, const std::string& colName) cons
     return -1;
 }
 
-bool NanoDB::matchesCondition(const Row& row, const Table& table, const Condition& cond) const {
+bool NanoDB::evaluateSingleCondition(const Row& row, const Table& table, const Condition& cond) const {
     if (!cond.hasCondition) return true;
 
     int colIdx = findColumnIndex(table, cond.column);
@@ -70,6 +72,27 @@ bool NanoDB::matchesCondition(const Row& row, const Table& table, const Conditio
     }
 
     return false;
+}
+
+bool NanoDB::evaluateWhereClause(const Row& row, const Table& table, const WhereClause& where) const {
+    if (!where.hasWhere) return true;
+    if (where.conditions.empty()) return true;
+
+    // Evaluate first condition
+    bool result = evaluateSingleCondition(row, table, where.conditions[0]);
+
+    // Apply AND/OR operators for remaining conditions
+    for (size_t i = 0; i < where.logicalOps.size() && i + 1 < where.conditions.size(); ++i) {
+        bool nextResult = evaluateSingleCondition(row, table, where.conditions[i + 1]);
+
+        if (where.logicalOps[i] == LogicalOp::AND) {
+            result = result && nextResult;
+        } else if (where.logicalOps[i] == LogicalOp::OR) {
+            result = result || nextResult;
+        }
+    }
+
+    return result;
 }
 
 void NanoDB::handleCreateTable(const Query& query) {
@@ -153,15 +176,9 @@ void NanoDB::handleUpdate(const Query& query) {
         }
     }
 
-    // Validate WHERE column exists (if present)
-    if (query.where.hasCondition && findColumnIndex(*table, query.where.column) < 0) {
-        std::cout << "Error: Column '" << query.where.column << "' not found.\n";
-        return;
-    }
-
     size_t updateCount = 0;
     for (auto& row : table->rows) {
-        if (matchesCondition(row, *table, query.where)) {
+        if (evaluateWhereClause(row, *table, query.where)) {
             for (const auto& sc : query.setClauses) {
                 int colIdx = findColumnIndex(*table, sc.column);
                 row[colIdx] = sc.value;
@@ -180,20 +197,14 @@ void NanoDB::handleDelete(const Query& query) {
         return;
     }
 
-    // Validate WHERE column exists (if present)
-    if (query.where.hasCondition && findColumnIndex(*table, query.where.column) < 0) {
-        std::cout << "Error: Column '" << query.where.column << "' not found.\n";
-        return;
-    }
-
     size_t beforeCount = table->rows.size();
 
-    if (query.where.hasCondition) {
+    if (query.where.hasWhere) {
         // Conditional delete
         table->rows.erase(
             std::remove_if(table->rows.begin(), table->rows.end(),
                 [this, table, &query](const Row& row) {
-                    return matchesCondition(row, *table, query.where);
+                    return evaluateWhereClause(row, *table, query.where);
                 }),
             table->rows.end()
         );
@@ -213,9 +224,67 @@ void NanoDB::handleSelect(const Query& query) {
         return;
     }
 
-    // Validate WHERE column exists (if present)
-    if (query.where.hasCondition && findColumnIndex(*table, query.where.column) < 0) {
-        std::cout << "Error: Column '" << query.where.column << "' not found.\n";
+    // Handle aggregate functions
+    if (!query.aggregates.empty()) {
+        // Collect matching rows
+        std::vector<const Row*> matchingRows;
+        for (const auto& row : table->rows) {
+            if (evaluateWhereClause(row, *table, query.where)) {
+                matchingRows.push_back(&row);
+            }
+        }
+
+        // Process each aggregate
+        for (const auto& agg : query.aggregates) {
+            if (agg.func == AggregateFunc::COUNT_STAR) {
+                std::cout << "COUNT(*)\n";
+                std::cout << "--------\n";
+                std::cout << matchingRows.size() << "\n";
+            } else if (agg.func == AggregateFunc::COUNT) {
+                int colIdx = findColumnIndex(*table, agg.column);
+                if (colIdx < 0) {
+                    std::cout << "Error: Column '" << agg.column << "' not found.\n";
+                    return;
+                }
+                std::cout << "COUNT(" << agg.column << ")\n";
+                std::cout << std::string(15, '-') << "\n";
+                std::cout << matchingRows.size() << "\n";
+            } else if (agg.func == AggregateFunc::SUM) {
+                int colIdx = findColumnIndex(*table, agg.column);
+                if (colIdx < 0) {
+                    std::cout << "Error: Column '" << agg.column << "' not found.\n";
+                    return;
+                }
+                int sum = 0;
+                for (const auto* row : matchingRows) {
+                    if (std::holds_alternative<int>((*row)[colIdx])) {
+                        sum += std::get<int>((*row)[colIdx]);
+                    }
+                }
+                std::cout << "SUM(" << agg.column << ")\n";
+                std::cout << std::string(15, '-') << "\n";
+                std::cout << sum << "\n";
+            } else if (agg.func == AggregateFunc::AVG) {
+                int colIdx = findColumnIndex(*table, agg.column);
+                if (colIdx < 0) {
+                    std::cout << "Error: Column '" << agg.column << "' not found.\n";
+                    return;
+                }
+                double sum = 0;
+                size_t count = 0;
+                for (const auto* row : matchingRows) {
+                    if (std::holds_alternative<int>((*row)[colIdx])) {
+                        sum += std::get<int>((*row)[colIdx]);
+                        ++count;
+                    }
+                }
+                double avg = count > 0 ? sum / count : 0;
+                std::cout << "AVG(" << agg.column << ")\n";
+                std::cout << std::string(15, '-') << "\n";
+                std::cout << std::fixed << std::setprecision(2) << avg << "\n";
+            }
+        }
+        std::cout << "1 row(s) returned.\n";
         return;
     }
 
@@ -238,6 +307,56 @@ void NanoDB::handleSelect(const Query& query) {
         }
     }
 
+    // Collect matching rows
+    std::vector<const Row*> matchingRows;
+    for (const auto& row : table->rows) {
+        if (evaluateWhereClause(row, *table, query.where)) {
+            matchingRows.push_back(&row);
+        }
+    }
+
+    // Apply ORDER BY
+    if (query.orderBy.hasOrderBy) {
+        int sortColIdx = findColumnIndex(*table, query.orderBy.column);
+        if (sortColIdx < 0) {
+            std::cout << "Error: Column '" << query.orderBy.column << "' not found.\n";
+            return;
+        }
+
+        std::sort(matchingRows.begin(), matchingRows.end(),
+            [sortColIdx, &query](const Row* a, const Row* b) {
+                const Value& va = (*a)[sortColIdx];
+                const Value& vb = (*b)[sortColIdx];
+
+                bool less = false;
+                if (std::holds_alternative<int>(va) && std::holds_alternative<int>(vb)) {
+                    less = std::get<int>(va) < std::get<int>(vb);
+                } else if (std::holds_alternative<std::string>(va) && std::holds_alternative<std::string>(vb)) {
+                    less = std::get<std::string>(va) < std::get<std::string>(vb);
+                }
+
+                return query.orderBy.order == SortOrder::ASC ? less : !less;
+            });
+    }
+
+    // Apply DISTINCT
+    std::vector<const Row*> resultRows;
+    if (query.distinct) {
+        std::set<std::vector<Value>> seen;
+        for (const auto* row : matchingRows) {
+            std::vector<Value> key;
+            for (size_t idx : colIndices) {
+                key.push_back((*row)[idx]);
+            }
+            if (seen.find(key) == seen.end()) {
+                seen.insert(key);
+                resultRows.push_back(row);
+            }
+        }
+    } else {
+        resultRows = matchingRows;
+    }
+
     // Print header
     for (size_t i = 0; i < colIndices.size(); ++i) {
         std::cout << std::setw(15) << table->columns[colIndices[i]].name;
@@ -252,20 +371,17 @@ void NanoDB::handleSelect(const Query& query) {
     }
     std::cout << "\n";
 
-    // Print rows (with WHERE and LIMIT)
+    // Print rows (with LIMIT)
     size_t rowCount = 0;
-    size_t maxRows = (query.limit > 0) ? static_cast<size_t>(query.limit) : table->rows.size();
+    size_t maxRows = (query.limit > 0) ? static_cast<size_t>(query.limit) : resultRows.size();
 
-    for (const auto& row : table->rows) {
+    for (const auto* row : resultRows) {
         if (rowCount >= maxRows) break;
-
-        // Check WHERE condition
-        if (!matchesCondition(row, *table, query.where)) continue;
 
         for (size_t i = 0; i < colIndices.size(); ++i) {
             std::visit([](const auto& val) {
                 std::cout << std::setw(15) << val;
-            }, row[colIndices[i]]);
+            }, (*row)[colIndices[i]]);
             if (i < colIndices.size() - 1) std::cout << " | ";
         }
         std::cout << "\n";
