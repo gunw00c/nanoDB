@@ -10,7 +10,6 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # Source files
 set(NANODB_SOURCES
-    src/storage/disk_manager.cpp
     src/catalog/catalog.cpp
     src/parser/sql_parser.cpp
     src/nanodb.cpp
