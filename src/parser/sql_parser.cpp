@@ -13,9 +13,15 @@ Query SQLParser::parse(const std::string& sql) {
     if (upper.find("CREATE TABLE") == 0) {
         query.type = "CREATE";
         parseCreateTable(trimmed, query);
+    } else if (upper.find("DROP TABLE") == 0) {
+        query.type = "DROP";
+        parseDropTable(trimmed, query);
     } else if (upper.find("INSERT INTO") == 0) {
         query.type = "INSERT";
         parseInsert(trimmed, query);
+    } else if (upper.find("DELETE FROM") == 0) {
+        query.type = "DELETE";
+        parseDelete(trimmed, query);
     } else if (upper.find("SELECT") == 0) {
         query.type = "SELECT";
         parseSelect(trimmed, query);
@@ -117,8 +123,63 @@ void SQLParser::parseSelect(const std::string& sql, Query& query) {
     size_t fromPos = upper.find("FROM");
     if (fromPos == std::string::npos) return;
 
-    query.tableName = trim(sql.substr(fromPos + 4));
-    // Remove trailing semicolon if present
+    // Parse columns between SELECT and FROM
+    size_t selectEnd = 6; // Length of "SELECT"
+    std::string columnsPart = trim(sql.substr(selectEnd, fromPos - selectEnd));
+
+    if (columnsPart != "*") {
+        std::stringstream ss(columnsPart);
+        std::string col;
+        while (std::getline(ss, col, ',')) {
+            query.selectColumns.push_back(trim(col));
+        }
+    }
+
+    // Parse table name (and possibly LIMIT)
+    std::string afterFrom = sql.substr(fromPos + 4);
+    size_t limitPos = upper.find("LIMIT", fromPos);
+
+    if (limitPos != std::string::npos) {
+        query.tableName = trim(sql.substr(fromPos + 4, limitPos - fromPos - 4));
+        std::string limitStr = trim(sql.substr(limitPos + 5));
+        // Remove trailing semicolon
+        if (!limitStr.empty() && limitStr.back() == ';') {
+            limitStr.pop_back();
+        }
+        try {
+            query.limit = std::stoi(limitStr);
+        } catch (...) {
+            query.limit = -1;
+        }
+    } else {
+        query.tableName = trim(afterFrom);
+    }
+
+    // Remove trailing semicolon from table name
+    if (!query.tableName.empty() && query.tableName.back() == ';') {
+        query.tableName.pop_back();
+        query.tableName = trim(query.tableName);
+    }
+}
+
+void SQLParser::parseDelete(const std::string& sql, Query& query) {
+    std::string upper = toUpper(sql);
+    size_t fromPos = upper.find("FROM") + 4;
+
+    query.tableName = trim(sql.substr(fromPos));
+    // Remove trailing semicolon
+    if (!query.tableName.empty() && query.tableName.back() == ';') {
+        query.tableName.pop_back();
+        query.tableName = trim(query.tableName);
+    }
+}
+
+void SQLParser::parseDropTable(const std::string& sql, Query& query) {
+    std::string upper = toUpper(sql);
+    size_t tablePos = upper.find("TABLE") + 5;
+
+    query.tableName = trim(sql.substr(tablePos));
+    // Remove trailing semicolon
     if (!query.tableName.empty() && query.tableName.back() == ';') {
         query.tableName.pop_back();
         query.tableName = trim(query.tableName);

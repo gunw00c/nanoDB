@@ -13,6 +13,15 @@ bool Catalog::createTable(const std::string& name, const std::vector<Column>& co
     return true;
 }
 
+bool Catalog::dropTable(const std::string& name) {
+    auto it = tables_.find(name);
+    if (it == tables_.end()) {
+        return false;
+    }
+    tables_.erase(it);
+    return true;
+}
+
 bool Catalog::tableExists(const std::string& name) const {
     return tables_.find(name) != tables_.end();
 }
