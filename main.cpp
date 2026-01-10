@@ -7,56 +7,66 @@ int main() {
 
     std::cout << "=== nanoDB Demo ===\n\n";
 
-    // Create tables
+    // Create table
     db.executeSQL("CREATE TABLE users (id INT, name STRING, age INT)");
-    db.executeSQL("CREATE TABLE orders (id INT, user_id INT, product_name STRING)");
     std::cout << "\n";
 
-    // Insert some data
+    // Standard INSERT
     db.executeSQL("INSERT INTO users VALUES (1, 'Alice', 30)");
     db.executeSQL("INSERT INTO users VALUES (2, 'Bob', 25)");
     db.executeSQL("INSERT INTO users VALUES (3, 'Charlie', 35)");
     db.executeSQL("INSERT INTO users VALUES (4, 'Diana', 28)");
-    db.executeSQL("INSERT INTO users VALUES (5, 'Eve', 32)");
-    db.executeSQL("INSERT INTO orders VALUES (1, 1, 'Laptop')");
-    db.executeSQL("INSERT INTO orders VALUES (2, 2, 'Smartphone')");
-    db.executeSQL("INSERT INTO orders VALUES (3, 3, 'Tablet')");
-    std::cout << "\n";
+    db.executeSQL("INSERT INTO users VALUES (5, 'Eve', 22)");
 
-    // SELECT * (all columns)
-    std::cout << "--- SELECT * FROM users ---\n";
+    // INSERT with explicit columns
+    std::cout << "\n--- INSERT with explicit columns ---\n";
+    db.executeSQL("INSERT INTO users (id, name) VALUES (6, 'Frank')");
+    db.executeSQL("SELECT * FROM users WHERE id = 6");
+
+    // SELECT all
+    std::cout << "\n--- SELECT * FROM users ---\n";
     db.executeSQL("SELECT * FROM users");
-    std::cout << "\n";
 
-    // SELECT specific columns
-    std::cout << "--- SELECT name, age FROM users ---\n";
-    db.executeSQL("SELECT name, age FROM users");
-    std::cout << "\n";
+    // SELECT with WHERE (equality)
+    std::cout << "\n--- SELECT * FROM users WHERE name = 'Alice' ---\n";
+    db.executeSQL("SELECT * FROM users WHERE name = 'Alice'");
 
-    // SELECT with LIMIT
-    std::cout << "--- SELECT * FROM users LIMIT 2 ---\n";
-    db.executeSQL("SELECT * FROM users LIMIT 2");
-    std::cout << "\n";
+    // SELECT with WHERE (comparison operators)
+    std::cout << "\n--- SELECT * FROM users WHERE age > 25 ---\n";
+    db.executeSQL("SELECT * FROM users WHERE age > 25");
 
-    // SELECT columns with LIMIT
-    std::cout << "--- SELECT name FROM users LIMIT 3 ---\n";
-    db.executeSQL("SELECT name FROM users LIMIT 3");
-    std::cout << "\n";
+    std::cout << "\n--- SELECT * FROM users WHERE age <= 28 ---\n";
+    db.executeSQL("SELECT * FROM users WHERE age <= 28");
 
-    // DELETE all rows from orders
-    std::cout << "--- DELETE FROM orders ---\n";
-    db.executeSQL("DELETE FROM orders");
-    db.executeSQL("SELECT * FROM orders");
-    std::cout << "\n";
+    std::cout << "\n--- SELECT name, age FROM users WHERE age >= 30 ---\n";
+    db.executeSQL("SELECT name, age FROM users WHERE age >= 30");
 
-    // DROP TABLE
-    std::cout << "--- DROP TABLE orders ---\n";
-    db.executeSQL("DROP TABLE orders");
-    db.executeSQL("SELECT * FROM orders");  // Should show error
-    std::cout << "\n";
+    // SELECT with WHERE and LIMIT
+    std::cout << "\n--- SELECT * FROM users WHERE age > 20 LIMIT 3 ---\n";
+    db.executeSQL("SELECT * FROM users WHERE age > 20 LIMIT 3");
+
+    // UPDATE without WHERE (all rows)
+    std::cout << "\n--- UPDATE users SET age = 99 WHERE name = 'Frank' ---\n";
+    db.executeSQL("UPDATE users SET age = 99 WHERE name = 'Frank'");
+    db.executeSQL("SELECT * FROM users WHERE name = 'Frank'");
+
+    // UPDATE with WHERE
+    std::cout << "\n--- UPDATE users SET age = 40 WHERE id = 1 ---\n";
+    db.executeSQL("UPDATE users SET age = 40 WHERE id = 1");
+    db.executeSQL("SELECT * FROM users WHERE id = 1");
+
+    // DELETE with WHERE
+    std::cout << "\n--- DELETE FROM users WHERE age < 25 ---\n";
+    db.executeSQL("DELETE FROM users WHERE age < 25");
+    db.executeSQL("SELECT * FROM users");
+
+    // DELETE specific row
+    std::cout << "\n--- DELETE FROM users WHERE name = 'Frank' ---\n";
+    db.executeSQL("DELETE FROM users WHERE name = 'Frank'");
+    db.executeSQL("SELECT * FROM users");
 
     // Final state
-    std::cout << "--- Final: SELECT * FROM users ---\n";
+    std::cout << "\n--- Final state ---\n";
     db.executeSQL("SELECT * FROM users");
 
     return 0;
