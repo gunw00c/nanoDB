@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.16)
-project(nanodb VERSION 0.1.0 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.10)
+project(nanodb)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,11 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 set(NANODB_SOURCES
     src/catalog/catalog.cpp
     src/parser/sql_parser.cpp
+    src/executor/ddl_executor.cpp
+    src/executor/dml_executor.cpp
+    src/executor/select_executor.cpp
+    src/executor/aggregate_executor.cpp
+    src/executor/join_executor.cpp
     src/nanodb.cpp
 )
 
