@@ -2,11 +2,10 @@
 
 #include <algorithm>
 #include <sstream>
-#include <regex>
 
 namespace nanodb {
 
-Query SQLParser::parse(const std::string& sql) {
+Query SQLParser ::parse(const std::string& sql) {
     Query query;
     std::string trimmed = trim(sql);
     std::string upper = toUpper(trimmed);
@@ -53,13 +52,18 @@ Value SQLParser::parseValue(const std::string& val) {
     std::string trimVal = trim(val);
 
     if (trimVal.empty()) {
-        return std::string("");
+        return NullValue{};
     }
 
     // Remove trailing semicolon
     if (!trimVal.empty() && trimVal.back() == ';') {
         trimVal.pop_back();
         trimVal = trim(trimVal);
+    }
+
+    // Check for NULL
+    if (toUpper(trimVal) == "NULL") {
+        return NullValue{};
     }
 
     // Check if it's a string (quoted)
@@ -127,11 +131,15 @@ void SQLParser::parseWhereClause(const std::string& sql, const std::string& uppe
 
     query.where.hasWhere = true;
 
-    // Find the end of WHERE clause (ORDER BY, LIMIT, or end of string)
+    // Find the end of WHERE clause
     size_t endPos = upper.length();
+    size_t groupPos = upper.find("GROUP BY", wherePos);
+    size_t havingPos = upper.find("HAVING", wherePos);
     size_t orderPos = upper.find("ORDER BY", wherePos);
     size_t limitPos = upper.find("LIMIT", wherePos);
 
+    if (groupPos != std::string::npos && groupPos < endPos) endPos = groupPos;
+    if (havingPos != std::string::npos && havingPos < endPos) endPos = havingPos;
     if (orderPos != std::string::npos && orderPos < endPos) endPos = orderPos;
     if (limitPos != std::string::npos && limitPos < endPos) endPos = limitPos;
 
@@ -247,6 +255,228 @@ void SQLParser::parseAggregates(const std::string& columnsPart, Query& query) {
     parseAgg("COUNT", AggregateFunc::COUNT);
     parseAgg("SUM", AggregateFunc::SUM);
     parseAgg("AVG", AggregateFunc::AVG);
+    parseAgg("MIN", AggregateFunc::MIN);
+    parseAgg("MAX", AggregateFunc::MAX);
+}
+
+void SQLParser::parseGroupBy(const std::string& sql, const std::string& upper, Query& query) {
+    size_t groupPos = upper.find("GROUP BY");
+    if (groupPos == std::string::npos) return;
+
+    query.groupBy.hasGroupBy = true;
+
+    // Find end of GROUP BY
+    size_t endPos = upper.length();
+    size_t havingPos = upper.find("HAVING", groupPos);
+    size_t orderPos = upper.find("ORDER BY", groupPos);
+    size_t limitPos = upper.find("LIMIT", groupPos);
+
+    if (havingPos != std::string::npos && havingPos < endPos) endPos = havingPos;
+    if (orderPos != std::string::npos && orderPos < endPos) endPos = orderPos;
+    if (limitPos != std::string::npos && limitPos < endPos) endPos = limitPos;
+
+    std::string groupStr = sql.substr(groupPos + 8, endPos - groupPos - 8);
+    groupStr = trim(groupStr);
+
+    // Remove trailing semicolon
+    if (!groupStr.empty() && groupStr.back() == ';') {
+        groupStr.pop_back();
+        groupStr = trim(groupStr);
+    }
+
+    // Parse comma-separated columns
+    std::stringstream ss(groupStr);
+    std::string col;
+    while (std::getline(ss, col, ',')) {
+        query.groupBy.columns.push_back(trim(col));
+    }
+}
+
+void SQLParser::parseHaving(const std::string& sql, const std::string& upper, Query& query) {
+    size_t havingPos = upper.find("HAVING");
+    if (havingPos == std::string::npos) return;
+
+    query.having.hasHaving = true;
+
+    // Find end of HAVING
+    size_t endPos = upper.length();
+    size_t orderPos = upper.find("ORDER BY", havingPos);
+    size_t limitPos = upper.find("LIMIT", havingPos);
+
+    if (orderPos != std::string::npos && orderPos < endPos) endPos = orderPos;
+    if (limitPos != std::string::npos && limitPos < endPos) endPos = limitPos;
+
+    std::string havingStr = sql.substr(havingPos + 6, endPos - havingPos - 6);
+    havingStr = trim(havingStr);
+
+    // Remove trailing semicolon
+    if (!havingStr.empty() && havingStr.back() == ';') {
+        havingStr.pop_back();
+        havingStr = trim(havingStr);
+    }
+
+    std::string upperHaving = toUpper(havingStr);
+
+    // Parse aggregate function in HAVING (e.g., COUNT(*) > 1, SUM(col) >= 100)
+    auto parseHavingAgg = [&](const std::string& funcName, AggregateFunc func) -> bool {
+        size_t funcPos = upperHaving.find(funcName + "(");
+        if (funcPos != std::string::npos) {
+            size_t parenStart = funcPos + funcName.length() + 1;
+            size_t parenEnd = upperHaving.find(")", parenStart);
+            if (parenEnd != std::string::npos) {
+                query.having.func = func;
+                std::string col = trim(havingStr.substr(parenStart, parenEnd - parenStart));
+                if (col == "*") {
+                    query.having.func = AggregateFunc::COUNT_STAR;
+                } else {
+                    query.having.column = col;
+                }
+
+                // Parse comparison after the function
+                std::string afterFunc = havingStr.substr(parenEnd + 1);
+                afterFunc = trim(afterFunc);
+
+                // Find operator
+                size_t opPos = std::string::npos;
+                size_t opLen = 1;
+                if ((opPos = afterFunc.find(">=")) != std::string::npos) {
+                    query.having.op = CompareOp::GE;
+                    opLen = 2;
+                } else if ((opPos = afterFunc.find("<=")) != std::string::npos) {
+                    query.having.op = CompareOp::LE;
+                    opLen = 2;
+                } else if ((opPos = afterFunc.find("!=")) != std::string::npos) {
+                    query.having.op = CompareOp::NE;
+                    opLen = 2;
+                } else if ((opPos = afterFunc.find(">")) != std::string::npos) {
+                    query.having.op = CompareOp::GT;
+                    opLen = 1;
+                } else if ((opPos = afterFunc.find("<")) != std::string::npos) {
+                    query.having.op = CompareOp::LT;
+                    opLen = 1;
+                } else if ((opPos = afterFunc.find("=")) != std::string::npos) {
+                    query.having.op = CompareOp::EQ;
+                    opLen = 1;
+                }
+
+                if (opPos != std::string::npos) {
+                    std::string valStr = trim(afterFunc.substr(opPos + opLen));
+                    try {
+                        query.having.value = std::stoi(valStr);
+                    } catch (...) {
+                        query.having.value = 0;
+                    }
+                }
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (!parseHavingAgg("COUNT", AggregateFunc::COUNT)) {
+        if (!parseHavingAgg("SUM", AggregateFunc::SUM)) {
+            if (!parseHavingAgg("AVG", AggregateFunc::AVG)) {
+                if (!parseHavingAgg("MIN", AggregateFunc::MIN)) {
+                    parseHavingAgg("MAX", AggregateFunc::MAX);
+                }
+            }
+        }
+    }
+}
+
+void SQLParser::parseJoin(const std::string& sql, const std::string& upper, Query& query) {
+    // Look for JOIN types
+    size_t joinPos = std::string::npos;
+    JoinType joinType = JoinType::INNER;
+
+    size_t innerPos = upper.find("INNER JOIN");
+    size_t leftPos = upper.find("LEFT JOIN");
+    size_t rightPos = upper.find("RIGHT JOIN");
+    size_t simpleJoinPos = upper.find(" JOIN ");
+
+    // Find the first JOIN keyword
+    if (leftPos != std::string::npos) {
+        joinPos = leftPos;
+        joinType = JoinType::LEFT;
+    } else if (rightPos != std::string::npos) {
+        joinPos = rightPos;
+        joinType = JoinType::RIGHT;
+    } else if (innerPos != std::string::npos) {
+        joinPos = innerPos;
+        joinType = JoinType::INNER;
+    } else if (simpleJoinPos != std::string::npos) {
+        joinPos = simpleJoinPos;
+        joinType = JoinType::INNER;  // Default to INNER
+    }
+
+    if (joinPos == std::string::npos) return;
+
+    query.join.hasJoin = true;
+    query.join.type = joinType;
+
+    // Find the join table name and ON clause
+    size_t joinKeywordEnd = joinPos;
+    if (joinType == JoinType::LEFT) {
+        joinKeywordEnd = joinPos + 9;  // "LEFT JOIN"
+    } else if (joinType == JoinType::RIGHT) {
+        joinKeywordEnd = joinPos + 10;  // "RIGHT JOIN"
+    } else if (upper.find("INNER JOIN", joinPos) == joinPos) {
+        joinKeywordEnd = joinPos + 10;  // "INNER JOIN"
+    } else {
+        joinKeywordEnd = joinPos + 5;  // " JOIN"
+    }
+
+    size_t onPos = upper.find(" ON ", joinKeywordEnd);
+    if (onPos == std::string::npos) return;
+
+    // Extract join table name
+    query.join.tableName = trim(sql.substr(joinKeywordEnd, onPos - joinKeywordEnd));
+
+    // Find end of ON clause
+    size_t endPos = upper.length();
+    size_t wherePos = upper.find("WHERE", onPos);
+    size_t groupPos = upper.find("GROUP BY", onPos);
+    size_t orderPos = upper.find("ORDER BY", onPos);
+    size_t limitPos = upper.find("LIMIT", onPos);
+
+    if (wherePos != std::string::npos && wherePos < endPos) endPos = wherePos;
+    if (groupPos != std::string::npos && groupPos < endPos) endPos = groupPos;
+    if (orderPos != std::string::npos && orderPos < endPos) endPos = orderPos;
+    if (limitPos != std::string::npos && limitPos < endPos) endPos = limitPos;
+
+    std::string onClause = sql.substr(onPos + 4, endPos - onPos - 4);
+    onClause = trim(onClause);
+
+    // Remove trailing semicolon
+    if (!onClause.empty() && onClause.back() == ';') {
+        onClause.pop_back();
+        onClause = trim(onClause);
+    }
+
+    // Parse ON condition: table1.col = table2.col
+    size_t eqPos = onClause.find('=');
+    if (eqPos != std::string::npos) {
+        std::string leftSide = trim(onClause.substr(0, eqPos));
+        std::string rightSide = trim(onClause.substr(eqPos + 1));
+
+        // Parse left side (table.column or just column)
+        size_t leftDot = leftSide.find('.');
+        if (leftDot != std::string::npos) {
+            query.join.leftTable = trim(leftSide.substr(0, leftDot));
+            query.join.leftColumn = trim(leftSide.substr(leftDot + 1));
+        } else {
+            query.join.leftColumn = leftSide;
+        }
+
+        // Parse right side (table.column or just column)
+        size_t rightDot = rightSide.find('.');
+        if (rightDot != std::string::npos) {
+            query.join.rightTable = trim(rightSide.substr(0, rightDot));
+            query.join.rightColumn = trim(rightSide.substr(rightDot + 1));
+        } else {
+            query.join.rightColumn = rightSide;
+        }
+    }
 }
 
 void SQLParser::parseCreateTable(const std::string& sql, Query& query) {
@@ -326,8 +556,6 @@ void SQLParser::parseInsert(const std::string& sql, Query& query) {
 
 void SQLParser::parseSelect(const std::string& sql, Query& query) {
     std::string upper = toUpper(sql);
-    size_t fromPos = upper.find("FROM");
-    if (fromPos == std::string::npos) return;
 
     // Check for DISTINCT
     size_t selectEnd = 6;  // Length of "SELECT"
@@ -335,6 +563,10 @@ void SQLParser::parseSelect(const std::string& sql, Query& query) {
         query.distinct = true;
         selectEnd = 15;  // Length of "SELECT DISTINCT"
     }
+
+    // Find FROM position
+    size_t fromPos = upper.find("FROM");
+    if (fromPos == std::string::npos) return;
 
     // Parse columns between SELECT [DISTINCT] and FROM
     std::string columnsPart = trim(sql.substr(selectEnd, fromPos - selectEnd));
@@ -351,13 +583,34 @@ void SQLParser::parseSelect(const std::string& sql, Query& query) {
         }
     }
 
+    // Check for JOIN first
+    parseJoin(sql, upper, query);
+
     // Find boundaries for table name
+    size_t tableEnd = upper.length();
+
+    // If there's a JOIN, table name is between FROM and JOIN
+    size_t joinPos = upper.find(" JOIN ", fromPos);
+    size_t innerJoinPos = upper.find("INNER JOIN", fromPos);
+    size_t leftJoinPos = upper.find("LEFT JOIN", fromPos);
+    size_t rightJoinPos = upper.find("RIGHT JOIN", fromPos);
+
+    size_t firstJoin = std::string::npos;
+    if (joinPos != std::string::npos) firstJoin = joinPos;
+    if (innerJoinPos != std::string::npos && (firstJoin == std::string::npos || innerJoinPos < firstJoin)) firstJoin = innerJoinPos;
+    if (leftJoinPos != std::string::npos && (firstJoin == std::string::npos || leftJoinPos < firstJoin)) firstJoin = leftJoinPos;
+    if (rightJoinPos != std::string::npos && (firstJoin == std::string::npos || rightJoinPos < firstJoin)) firstJoin = rightJoinPos;
+
     size_t wherePos = upper.find("WHERE", fromPos);
+    size_t groupPos = upper.find("GROUP BY", fromPos);
+    size_t havingPos = upper.find("HAVING", fromPos);
     size_t orderPos = upper.find("ORDER BY", fromPos);
     size_t limitPos = upper.find("LIMIT", fromPos);
 
-    size_t tableEnd = upper.length();
+    if (firstJoin != std::string::npos && firstJoin < tableEnd) tableEnd = firstJoin;
     if (wherePos != std::string::npos && wherePos < tableEnd) tableEnd = wherePos;
+    if (groupPos != std::string::npos && groupPos < tableEnd) tableEnd = groupPos;
+    if (havingPos != std::string::npos && havingPos < tableEnd) tableEnd = havingPos;
     if (orderPos != std::string::npos && orderPos < tableEnd) tableEnd = orderPos;
     if (limitPos != std::string::npos && limitPos < tableEnd) tableEnd = limitPos;
 
@@ -371,6 +624,12 @@ void SQLParser::parseSelect(const std::string& sql, Query& query) {
 
     // Parse WHERE clause (with AND/OR support)
     parseWhereClause(sql, upper, query);
+
+    // Parse GROUP BY
+    parseGroupBy(sql, upper, query);
+
+    // Parse HAVING
+    parseHaving(sql, upper, query);
 
     // Parse ORDER BY
     parseOrderBy(sql, upper, query);

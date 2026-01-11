@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <set>
 #include <numeric>
+#include <map>
+#include <type_traits>
 
 namespace nanodb {
 
@@ -218,13 +220,25 @@ void NanoDB::handleDelete(const Query& query) {
 }
 
 void NanoDB::handleSelect(const Query& query) {
+    // Check for JOIN first
+    if (query.join.hasJoin) {
+        handleSelectWithJoin(query);
+        return;
+    }
+
+    // Check for GROUP BY
+    if (query.groupBy.hasGroupBy) {
+        handleSelectWithGroupBy(query);
+        return;
+    }
+
     const Table* table = catalog_.getTable(query.tableName);
     if (!table) {
         std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";
         return;
     }
 
-    // Handle aggregate functions
+    // Handle aggregate functions (without GROUP BY)
     if (!query.aggregates.empty()) {
         // Collect matching rows
         std::vector<const Row*> matchingRows;
@@ -380,8 +394,349 @@ void NanoDB::handleSelect(const Query& query) {
 
         for (size_t i = 0; i < colIndices.size(); ++i) {
             std::visit([](const auto& val) {
-                std::cout << std::setw(15) << val;
+                using T = std::decay_t<decltype(val)>;
+                if constexpr (std::is_same_v<T, NullValue>) {
+                    std::cout << std::setw(15) << "NULL";
+                } else {
+                    std::cout << std::setw(15) << val;
+                }
             }, (*row)[colIndices[i]]);
+            if (i < colIndices.size() - 1) std::cout << " | ";
+        }
+        std::cout << "\n";
+        ++rowCount;
+    }
+
+    std::cout << rowCount << " row(s) returned.\n";
+}
+
+int NanoDB::computeAggregate(AggregateFunc func, const std::string& column,
+                              const std::vector<const Row*>& rows, const Table& table) const {
+    if (func == AggregateFunc::COUNT_STAR || func == AggregateFunc::COUNT) {
+        return static_cast<int>(rows.size());
+    }
+
+    int colIdx = findColumnIndex(table, column);
+    if (colIdx < 0) return 0;
+
+    int result = 0;
+    int count = 0;
+
+    for (const auto* row : rows) {
+        if (std::holds_alternative<int>((*row)[colIdx])) {
+            int val = std::get<int>((*row)[colIdx]);
+            switch (func) {
+                case AggregateFunc::SUM:
+                case AggregateFunc::AVG:
+                    result += val;
+                    ++count;
+                    break;
+                case AggregateFunc::MIN:
+                    if (count == 0 || val < result) result = val;
+                    ++count;
+                    break;
+                case AggregateFunc::MAX:
+                    if (count == 0 || val > result) result = val;
+                    ++count;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    if (func == AggregateFunc::AVG && count > 0) {
+        result = result / count;
+    }
+
+    return result;
+}
+
+bool NanoDB::evaluateHaving(const HavingClause& having,
+                             const std::vector<const Row*>& groupRows, const Table& table) const {
+    if (!having.hasHaving) return true;
+
+    int aggValue = computeAggregate(having.func, having.column, groupRows, table);
+
+    switch (having.op) {
+        case CompareOp::EQ: return aggValue == having.value;
+        case CompareOp::NE: return aggValue != having.value;
+        case CompareOp::LT: return aggValue < having.value;
+        case CompareOp::LE: return aggValue <= having.value;
+        case CompareOp::GT: return aggValue > having.value;
+        case CompareOp::GE: return aggValue >= having.value;
+    }
+    return true;
+}
+
+void NanoDB::handleSelectWithGroupBy(const Query& query) {
+    const Table* table = catalog_.getTable(query.tableName);
+    if (!table) {
+        std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";
+        return;
+    }
+
+    // Get column indices for GROUP BY columns
+    std::vector<int> groupColIndices;
+    for (const auto& col : query.groupBy.columns) {
+        int idx = findColumnIndex(*table, col);
+        if (idx < 0) {
+            std::cout << "Error: Column '" << col << "' not found.\n";
+            return;
+        }
+        groupColIndices.push_back(idx);
+    }
+
+    // Collect matching rows (apply WHERE)
+    std::vector<const Row*> matchingRows;
+    for (const auto& row : table->rows) {
+        if (evaluateWhereClause(row, *table, query.where)) {
+            matchingRows.push_back(&row);
+        }
+    }
+
+    // Group rows by key
+    std::map<std::vector<Value>, std::vector<const Row*>> groups;
+    for (const auto* row : matchingRows) {
+        std::vector<Value> key;
+        for (int idx : groupColIndices) {
+            key.push_back((*row)[idx]);
+        }
+        groups[key].push_back(row);
+    }
+
+    // Apply HAVING and collect results
+    std::vector<std::pair<std::vector<Value>, std::vector<const Row*>>> filteredGroups;
+    for (auto& [key, groupRows] : groups) {
+        if (evaluateHaving(query.having, groupRows, *table)) {
+            filteredGroups.push_back({key, std::move(groupRows)});
+        }
+    }
+
+    // Determine output columns
+    std::vector<std::string> outputHeaders;
+    for (const auto& col : query.groupBy.columns) {
+        outputHeaders.push_back(col);
+    }
+    for (const auto& agg : query.aggregates) {
+        if (agg.func == AggregateFunc::COUNT_STAR) {
+            outputHeaders.push_back("COUNT(*)");
+        } else {
+            std::string funcName;
+            switch (agg.func) {
+                case AggregateFunc::COUNT: funcName = "COUNT"; break;
+                case AggregateFunc::SUM: funcName = "SUM"; break;
+                case AggregateFunc::AVG: funcName = "AVG"; break;
+                case AggregateFunc::MIN: funcName = "MIN"; break;
+                case AggregateFunc::MAX: funcName = "MAX"; break;
+                default: funcName = "?"; break;
+            }
+            outputHeaders.push_back(funcName + "(" + agg.column + ")");
+        }
+    }
+
+    // Print header
+    for (size_t i = 0; i < outputHeaders.size(); ++i) {
+        std::cout << std::setw(15) << outputHeaders[i];
+        if (i < outputHeaders.size() - 1) std::cout << " | ";
+    }
+    std::cout << "\n";
+
+    // Print separator
+    for (size_t i = 0; i < outputHeaders.size(); ++i) {
+        std::cout << std::string(15, '-');
+        if (i < outputHeaders.size() - 1) std::cout << "-+-";
+    }
+    std::cout << "\n";
+
+    // Print rows
+    size_t rowCount = 0;
+    for (const auto& [key, groupRows] : filteredGroups) {
+        // Print group key values
+        for (size_t i = 0; i < key.size(); ++i) {
+            std::visit([](const auto& val) {
+                using T = std::decay_t<decltype(val)>;
+                if constexpr (std::is_same_v<T, NullValue>) {
+                    std::cout << std::setw(15) << "NULL";
+                } else {
+                    std::cout << std::setw(15) << val;
+                }
+            }, key[i]);
+            if (i < key.size() - 1 || !query.aggregates.empty()) std::cout << " | ";
+        }
+
+        // Print aggregate values
+        for (size_t i = 0; i < query.aggregates.size(); ++i) {
+            const auto& agg = query.aggregates[i];
+            int val = computeAggregate(agg.func, agg.column, groupRows, *table);
+            std::cout << std::setw(15) << val;
+            if (i < query.aggregates.size() - 1) std::cout << " | ";
+        }
+        std::cout << "\n";
+        ++rowCount;
+    }
+
+    std::cout << rowCount << " row(s) returned.\n";
+}
+
+void NanoDB::handleSelectWithJoin(const Query& query) {
+    // Get left table
+    const Table* leftTable = catalog_.getTable(query.tableName);
+    if (!leftTable) {
+        std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";
+        return;
+    }
+
+    // Get right table
+    const Table* rightTable = catalog_.getTable(query.join.tableName);
+    if (!rightTable) {
+        std::cout << "Error: Table '" << query.join.tableName << "' does not exist.\n";
+        return;
+    }
+
+    // Find join column indices
+    int leftJoinCol = findColumnIndex(*leftTable, query.join.leftColumn);
+    int rightJoinCol = findColumnIndex(*rightTable, query.join.rightColumn);
+
+    if (leftJoinCol < 0) {
+        std::cout << "Error: Column '" << query.join.leftColumn << "' not found in " << query.tableName << ".\n";
+        return;
+    }
+    if (rightJoinCol < 0) {
+        std::cout << "Error: Column '" << query.join.rightColumn << "' not found in " << query.join.tableName << ".\n";
+        return;
+    }
+
+    // Build combined schema
+    std::vector<Column> combinedCols;
+    for (const auto& col : leftTable->columns) {
+        combinedCols.push_back({query.tableName + "." + col.name, col.type});
+    }
+    for (const auto& col : rightTable->columns) {
+        combinedCols.push_back({query.join.tableName + "." + col.name, col.type});
+    }
+
+    // Create a temporary table for combined schema lookups
+    Table combinedTable;
+    combinedTable.columns = combinedCols;
+
+    // Perform nested loop join
+    std::vector<Row> joinedRows;
+
+    if (query.join.type == JoinType::INNER) {
+        for (const auto& leftRow : leftTable->rows) {
+            for (const auto& rightRow : rightTable->rows) {
+                if (leftRow[leftJoinCol] == rightRow[rightJoinCol]) {
+                    Row combined = leftRow;
+                    combined.insert(combined.end(), rightRow.begin(), rightRow.end());
+                    joinedRows.push_back(combined);
+                }
+            }
+        }
+    } else if (query.join.type == JoinType::LEFT) {
+        for (const auto& leftRow : leftTable->rows) {
+            bool matched = false;
+            for (const auto& rightRow : rightTable->rows) {
+                if (leftRow[leftJoinCol] == rightRow[rightJoinCol]) {
+                    Row combined = leftRow;
+                    combined.insert(combined.end(), rightRow.begin(), rightRow.end());
+                    joinedRows.push_back(combined);
+                    matched = true;
+                }
+            }
+            if (!matched) {
+                // Add left row with NULLs for right side
+                Row combined = leftRow;
+                for (size_t i = 0; i < rightTable->columns.size(); ++i) {
+                    combined.push_back(NullValue{});
+                }
+                joinedRows.push_back(combined);
+            }
+        }
+    } else if (query.join.type == JoinType::RIGHT) {
+        for (const auto& rightRow : rightTable->rows) {
+            bool matched = false;
+            for (const auto& leftRow : leftTable->rows) {
+                if (leftRow[leftJoinCol] == rightRow[rightJoinCol]) {
+                    Row combined = leftRow;
+                    combined.insert(combined.end(), rightRow.begin(), rightRow.end());
+                    joinedRows.push_back(combined);
+                    matched = true;
+                }
+            }
+            if (!matched) {
+                // Add NULLs for left side with right row
+                Row combined;
+                for (size_t i = 0; i < leftTable->columns.size(); ++i) {
+                    combined.push_back(NullValue{});
+                }
+                combined.insert(combined.end(), rightRow.begin(), rightRow.end());
+                joinedRows.push_back(combined);
+            }
+        }
+    }
+
+    // Determine which columns to display
+    std::vector<size_t> colIndices;
+    std::vector<std::string> displayNames;
+
+    if (query.selectColumns.empty()) {
+        // SELECT * - all columns
+        for (size_t i = 0; i < combinedCols.size(); ++i) {
+            colIndices.push_back(i);
+            displayNames.push_back(combinedCols[i].name);
+        }
+    } else {
+        // Specific columns - need to handle table.column notation
+        for (const auto& colName : query.selectColumns) {
+            bool found = false;
+            for (size_t i = 0; i < combinedCols.size(); ++i) {
+                // Match full name (table.column) or just column name
+                if (combinedCols[i].name == colName ||
+                    combinedCols[i].name.substr(combinedCols[i].name.find('.') + 1) == colName) {
+                    colIndices.push_back(i);
+                    displayNames.push_back(colName);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                std::cout << "Error: Column '" << colName << "' not found.\n";
+                return;
+            }
+        }
+    }
+
+    // Print header
+    for (size_t i = 0; i < displayNames.size(); ++i) {
+        std::cout << std::setw(15) << displayNames[i];
+        if (i < displayNames.size() - 1) std::cout << " | ";
+    }
+    std::cout << "\n";
+
+    // Print separator
+    for (size_t i = 0; i < displayNames.size(); ++i) {
+        std::cout << std::string(15, '-');
+        if (i < displayNames.size() - 1) std::cout << "-+-";
+    }
+    std::cout << "\n";
+
+    // Print rows
+    size_t rowCount = 0;
+    size_t maxRows = (query.limit > 0) ? static_cast<size_t>(query.limit) : joinedRows.size();
+
+    for (const auto& row : joinedRows) {
+        if (rowCount >= maxRows) break;
+
+        for (size_t i = 0; i < colIndices.size(); ++i) {
+            std::visit([](const auto& val) {
+                using T = std::decay_t<decltype(val)>;
+                if constexpr (std::is_same_v<T, NullValue>) {
+                    std::cout << std::setw(15) << "NULL";
+                } else {
+                    std::cout << std::setw(15) << val;
+                }
+            }, row[colIndices[i]]);
             if (i < colIndices.size() - 1) std::cout << " | ";
         }
         std::cout << "\n";

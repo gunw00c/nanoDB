@@ -102,5 +102,53 @@ int main() {
     std::cout << "\n--- Final state ---\n";
     db.executeSQL("SELECT * FROM users ORDER BY id");
 
+    // ==================== GROUP BY ====================
+    std::cout << "\n\n=== GROUP BY and HAVING Demo ===\n";
+
+    std::cout << "\n--- GROUP BY city, COUNT(*) ---\n";
+    db.executeSQL("SELECT city, COUNT(*) FROM users GROUP BY city");
+
+    std::cout << "\n--- GROUP BY city, SUM(age) ---\n";
+    db.executeSQL("SELECT city, SUM(age) FROM users GROUP BY city");
+
+    std::cout << "\n--- GROUP BY city, AVG(age) ---\n";
+    db.executeSQL("SELECT city, AVG(age) FROM users GROUP BY city");
+
+    // ==================== GROUP BY with HAVING ====================
+    std::cout << "\n--- GROUP BY city HAVING COUNT(*) > 1 ---\n";
+    db.executeSQL("SELECT city, COUNT(*) FROM users GROUP BY city HAVING COUNT(*) > 1");
+
+    std::cout << "\n--- GROUP BY city HAVING AVG(age) >= 30 ---\n";
+    db.executeSQL("SELECT city, AVG(age) FROM users GROUP BY city HAVING AVG(age) >= 30");
+
+    // ==================== JOIN Demo ====================
+    std::cout << "\n\n=== JOIN Demo ===\n";
+
+    // Create orders table for JOIN demo
+    db.executeSQL("CREATE TABLE orders (order_id INT, user_id INT, product STRING, amount INT)");
+    db.executeSQL("INSERT INTO orders VALUES (101, 1, 'Laptop', 1200)");
+    db.executeSQL("INSERT INTO orders VALUES (102, 2, 'Phone', 800)");
+    db.executeSQL("INSERT INTO orders VALUES (103, 1, 'Tablet', 500)");
+    db.executeSQL("INSERT INTO orders VALUES (104, 4, 'Monitor', 350)");
+    db.executeSQL("INSERT INTO orders VALUES (105, 99, 'Keyboard', 100)");  // user_id 99 doesn't exist
+    std::cout << "\n";
+
+    std::cout << "--- Orders table ---\n";
+    db.executeSQL("SELECT * FROM orders");
+
+    // INNER JOIN
+    std::cout << "\n--- INNER JOIN users and orders ON id = user_id ---\n";
+    db.executeSQL("SELECT * FROM users INNER JOIN orders ON id = user_id");
+
+    // LEFT JOIN
+    std::cout << "\n--- LEFT JOIN users and orders ON id = user_id ---\n";
+    db.executeSQL("SELECT name, product, amount FROM users LEFT JOIN orders ON id = user_id");
+
+    // RIGHT JOIN
+    std::cout << "\n--- RIGHT JOIN users and orders ON id = user_id ---\n";
+    db.executeSQL("SELECT name, product, amount FROM users RIGHT JOIN orders ON id = user_id");
+
+    std::cout << "\n=== Demo Complete ===\n";
+
     return 0;
 }
