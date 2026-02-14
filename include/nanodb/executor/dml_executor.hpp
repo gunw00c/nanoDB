@@ -9,9 +9,9 @@ class DMLExecutor {
 public:
     explicit DMLExecutor(Catalog& catalog);
 
-    void executeInsert(const Query& query);
-    void executeUpdate(const Query& query);
-    void executeDelete(const Query& query);
+    void executeInsert(const InsertQuery& query);
+    void executeUpdate(const UpdateQuery& query);
+    void executeDelete(const DeleteQuery& query);
 
 private:
     int findColumnIndex(const Table& table, const std::string& colName) const;

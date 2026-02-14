@@ -5,34 +5,25 @@
 
 namespace nanodb {
 
-Query SQLParser ::parse(const std::string& sql) {
-    Query query;
+std::unique_ptr<Query> SQLParser::parse(const std::string& sql) {
     std::string trimmed = trim(sql);
     std::string upper = toUpper(trimmed);
 
     if (upper.find("CREATE TABLE") == 0) {
-        query.type = "CREATE";
-        parseCreateTable(trimmed, query);
+        return parseCreateTable(trimmed);
     } else if (upper.find("DROP TABLE") == 0) {
-        query.type = "DROP";
-        parseDropTable(trimmed, query);
+        return parseDropTable(trimmed);
     } else if (upper.find("INSERT INTO") == 0) {
-        query.type = "INSERT";
-        parseInsert(trimmed, query);
+        return parseInsert(trimmed);
     } else if (upper.find("UPDATE") == 0) {
-        query.type = "UPDATE";
-        parseUpdate(trimmed, query);
+        return parseUpdate(trimmed);
     } else if (upper.find("DELETE FROM") == 0) {
-        query.type = "DELETE";
-        parseDelete(trimmed, query);
+        return parseDelete(trimmed);
     } else if (upper.find("SELECT") == 0) {
-        query.type = "SELECT";
-        parseSelect(trimmed, query);
-    } else {
-        query.type = "UNKNOWN";
+        return parseSelect(trimmed);
     }
 
-    return query;
+    return nullptr;
 }
 
 std::string SQLParser::trim(const std::string& str) {
@@ -125,11 +116,11 @@ Condition SQLParser::parseSingleCondition(const std::string& condStr) {
     return cond;
 }
 
-void SQLParser::parseWhereClause(const std::string& sql, const std::string& upper, Query& query) {
+void SQLParser::parseWhereClause(const std::string& sql, const std::string& upper, WhereClause& where) {
     size_t wherePos = upper.find("WHERE");
     if (wherePos == std::string::npos) return;
 
-    query.where.hasWhere = true;
+    where.hasWhere = true;
 
     // Find the end of WHERE clause
     size_t endPos = upper.length();
@@ -188,12 +179,12 @@ void SQLParser::parseWhereClause(const std::string& sql, const std::string& uppe
 
     // Parse each condition
     for (const auto& part : parts) {
-        query.where.conditions.push_back(parseSingleCondition(part));
+        where.conditions.push_back(parseSingleCondition(part));
     }
-    query.where.logicalOps = ops;
+    where.logicalOps = ops;
 }
 
-void SQLParser::parseOrderBy(const std::string& sql, const std::string& upper, Query& query) {
+void SQLParser::parseOrderBy(const std::string& sql, const std::string& upper, SelectQuery& query) {
     size_t orderPos = upper.find("ORDER BY");
     if (orderPos == std::string::npos) return;
 
@@ -229,7 +220,7 @@ void SQLParser::parseOrderBy(const std::string& sql, const std::string& upper, Q
     }
 }
 
-void SQLParser::parseAggregates(const std::string& columnsPart, Query& query) {
+void SQLParser::parseAggregates(const std::string& columnsPart, SelectQuery& query) {
     std::string upper = toUpper(columnsPart);
 
     // Check for aggregate functions
@@ -259,7 +250,7 @@ void SQLParser::parseAggregates(const std::string& columnsPart, Query& query) {
     parseAgg("MAX", AggregateFunc::MAX);
 }
 
-void SQLParser::parseGroupBy(const std::string& sql, const std::string& upper, Query& query) {
+void SQLParser::parseGroupBy(const std::string& sql, const std::string& upper, SelectQuery& query) {
     size_t groupPos = upper.find("GROUP BY");
     if (groupPos == std::string::npos) return;
 
@@ -292,7 +283,7 @@ void SQLParser::parseGroupBy(const std::string& sql, const std::string& upper, Q
     }
 }
 
-void SQLParser::parseHaving(const std::string& sql, const std::string& upper, Query& query) {
+void SQLParser::parseHaving(const std::string& sql, const std::string& upper, SelectQuery& query) {
     size_t havingPos = upper.find("HAVING");
     if (havingPos == std::string::npos) return;
 
@@ -384,7 +375,7 @@ void SQLParser::parseHaving(const std::string& sql, const std::string& upper, Qu
     }
 }
 
-void SQLParser::parseJoin(const std::string& sql, const std::string& upper, Query& query) {
+void SQLParser::parseJoin(const std::string& sql, const std::string& upper, SelectQuery& query) {
     // Look for JOIN types
     size_t joinPos = std::string::npos;
     JoinType joinType = JoinType::INNER;
@@ -479,19 +470,21 @@ void SQLParser::parseJoin(const std::string& sql, const std::string& upper, Quer
     }
 }
 
-void SQLParser::parseCreateTable(const std::string& sql, Query& query) {
+std::unique_ptr<CreateQuery> SQLParser::parseCreateTable(const std::string& sql) {
+    auto query = std::make_unique<CreateQuery>();
+
     size_t tableStart = sql.find("TABLE") + 5;
     if (tableStart == std::string::npos + 5) {
         tableStart = sql.find("table") + 5;
     }
 
     size_t parenStart = sql.find('(');
-    if (parenStart == std::string::npos) return;
+    if (parenStart == std::string::npos) return query;
 
-    query.tableName = trim(sql.substr(tableStart, parenStart - tableStart));
+    query->tableName = trim(sql.substr(tableStart, parenStart - tableStart));
 
     size_t parenEnd = sql.find(')');
-    if (parenEnd == std::string::npos) return;
+    if (parenEnd == std::string::npos) return query;
 
     std::string colDefs = sql.substr(parenStart + 1, parenEnd - parenStart - 1);
     std::stringstream ss(colDefs);
@@ -511,80 +504,86 @@ void SQLParser::parseCreateTable(const std::string& sql, Query& query) {
         } else {
             col.type = ColumnType::STRING;
         }
-        query.columns.push_back(col);
+        query->columns.push_back(col);
     }
+
+    return query;
 }
 
-void SQLParser::parseInsert(const std::string& sql, Query& query) {
+std::unique_ptr<InsertQuery> SQLParser::parseInsert(const std::string& sql) {
+    auto query = std::make_unique<InsertQuery>();
     std::string upper = toUpper(sql);
     size_t intoPos = upper.find("INTO") + 4;
     size_t valuesPos = upper.find("VALUES");
 
-    if (valuesPos == std::string::npos) return;
+    if (valuesPos == std::string::npos) return query;
 
     std::string tableAndCols = trim(sql.substr(intoPos, valuesPos - intoPos));
 
     // Check for explicit column names: INSERT INTO table (col1, col2) VALUES ...
     size_t colParenStart = tableAndCols.find('(');
     if (colParenStart != std::string::npos) {
-        query.tableName = trim(tableAndCols.substr(0, colParenStart));
+        query->tableName = trim(tableAndCols.substr(0, colParenStart));
         size_t colParenEnd = tableAndCols.find(')');
         if (colParenEnd != std::string::npos) {
             std::string colList = tableAndCols.substr(colParenStart + 1, colParenEnd - colParenStart - 1);
             std::stringstream ss(colList);
             std::string col;
             while (std::getline(ss, col, ',')) {
-                query.insertColumns.push_back(trim(col));
+                query->insertColumns.push_back(trim(col));
             }
         }
     } else {
-        query.tableName = tableAndCols;
+        query->tableName = tableAndCols;
     }
 
     size_t parenStart = sql.find('(', valuesPos);
     size_t parenEnd = sql.find(')', parenStart);
-    if (parenStart == std::string::npos || parenEnd == std::string::npos) return;
+    if (parenStart == std::string::npos || parenEnd == std::string::npos) return query;
 
     std::string valueStr = sql.substr(parenStart + 1, parenEnd - parenStart - 1);
     std::stringstream ss(valueStr);
     std::string val;
 
     while (std::getline(ss, val, ',')) {
-        query.values.push_back(parseValue(val));
+        query->values.push_back(parseValue(val));
     }
+
+    return query;
 }
 
-void SQLParser::parseSelect(const std::string& sql, Query& query) {
+std::unique_ptr<SelectQuery> SQLParser::parseSelect(const std::string& sql) {
+    auto query = std::make_unique<SelectQuery>();
     std::string upper = toUpper(sql);
 
     // Check for DISTINCT
     size_t selectEnd = 6;  // Length of "SELECT"
     if (upper.find("SELECT DISTINCT") == 0) {
-        query.distinct = true;
+        query->distinct = true;
         selectEnd = 15;  // Length of "SELECT DISTINCT"
     }
 
     // Find FROM position
     size_t fromPos = upper.find("FROM");
-    if (fromPos == std::string::npos) return;
+    if (fromPos == std::string::npos) return query;
 
     // Parse columns between SELECT [DISTINCT] and FROM
     std::string columnsPart = trim(sql.substr(selectEnd, fromPos - selectEnd));
 
     // Check for aggregate functions
-    parseAggregates(columnsPart, query);
+    parseAggregates(columnsPart, *query);
 
     // If no aggregates, parse as regular columns
-    if (query.aggregates.empty() && columnsPart != "*") {
+    if (query->aggregates.empty() && columnsPart != "*") {
         std::stringstream ss(columnsPart);
         std::string col;
         while (std::getline(ss, col, ',')) {
-            query.selectColumns.push_back(trim(col));
+            query->selectColumns.push_back(trim(col));
         }
     }
 
     // Check for JOIN first
-    parseJoin(sql, upper, query);
+    parseJoin(sql, upper, *query);
 
     // Find boundaries for table name
     size_t tableEnd = upper.length();
@@ -614,25 +613,25 @@ void SQLParser::parseSelect(const std::string& sql, Query& query) {
     if (orderPos != std::string::npos && orderPos < tableEnd) tableEnd = orderPos;
     if (limitPos != std::string::npos && limitPos < tableEnd) tableEnd = limitPos;
 
-    query.tableName = trim(sql.substr(fromPos + 4, tableEnd - fromPos - 4));
+    query->tableName = trim(sql.substr(fromPos + 4, tableEnd - fromPos - 4));
 
     // Remove trailing semicolon from table name
-    if (!query.tableName.empty() && query.tableName.back() == ';') {
-        query.tableName.pop_back();
-        query.tableName = trim(query.tableName);
+    if (!query->tableName.empty() && query->tableName.back() == ';') {
+        query->tableName.pop_back();
+        query->tableName = trim(query->tableName);
     }
 
     // Parse WHERE clause (with AND/OR support)
-    parseWhereClause(sql, upper, query);
+    parseWhereClause(sql, upper, query->where);
 
     // Parse GROUP BY
-    parseGroupBy(sql, upper, query);
+    parseGroupBy(sql, upper, *query);
 
     // Parse HAVING
-    parseHaving(sql, upper, query);
+    parseHaving(sql, upper, *query);
 
     // Parse ORDER BY
-    parseOrderBy(sql, upper, query);
+    parseOrderBy(sql, upper, *query);
 
     // Parse LIMIT
     if (limitPos != std::string::npos) {
@@ -642,14 +641,17 @@ void SQLParser::parseSelect(const std::string& sql, Query& query) {
             limitStr.pop_back();
         }
         try {
-            query.limit = std::stoi(limitStr);
+            query->limit = std::stoi(limitStr);
         } catch (...) {
-            query.limit = -1;
+            query->limit = -1;
         }
     }
+
+    return query;
 }
 
-void SQLParser::parseDelete(const std::string& sql, Query& query) {
+std::unique_ptr<DeleteQuery> SQLParser::parseDelete(const std::string& sql) {
+    auto query = std::make_unique<DeleteQuery>();
     std::string upper = toUpper(sql);
     size_t fromPos = upper.find("FROM") + 4;
 
@@ -657,38 +659,44 @@ void SQLParser::parseDelete(const std::string& sql, Query& query) {
     size_t wherePos = upper.find("WHERE");
 
     if (wherePos != std::string::npos) {
-        query.tableName = trim(sql.substr(fromPos, wherePos - fromPos));
-        parseWhereClause(sql, upper, query);
+        query->tableName = trim(sql.substr(fromPos, wherePos - fromPos));
+        parseWhereClause(sql, upper, query->where);
     } else {
-        query.tableName = trim(sql.substr(fromPos));
+        query->tableName = trim(sql.substr(fromPos));
         // Remove trailing semicolon
-        if (!query.tableName.empty() && query.tableName.back() == ';') {
-            query.tableName.pop_back();
-            query.tableName = trim(query.tableName);
+        if (!query->tableName.empty() && query->tableName.back() == ';') {
+            query->tableName.pop_back();
+            query->tableName = trim(query->tableName);
         }
     }
+
+    return query;
 }
 
-void SQLParser::parseDropTable(const std::string& sql, Query& query) {
+std::unique_ptr<DropQuery> SQLParser::parseDropTable(const std::string& sql) {
+    auto query = std::make_unique<DropQuery>();
     std::string upper = toUpper(sql);
     size_t tablePos = upper.find("TABLE") + 5;
 
-    query.tableName = trim(sql.substr(tablePos));
+    query->tableName = trim(sql.substr(tablePos));
     // Remove trailing semicolon
-    if (!query.tableName.empty() && query.tableName.back() == ';') {
-        query.tableName.pop_back();
-        query.tableName = trim(query.tableName);
+    if (!query->tableName.empty() && query->tableName.back() == ';') {
+        query->tableName.pop_back();
+        query->tableName = trim(query->tableName);
     }
+
+    return query;
 }
 
-void SQLParser::parseUpdate(const std::string& sql, Query& query) {
+std::unique_ptr<UpdateQuery> SQLParser::parseUpdate(const std::string& sql) {
+    auto query = std::make_unique<UpdateQuery>();
     std::string upper = toUpper(sql);
 
     // UPDATE table SET col = val WHERE ...
     size_t setPos = upper.find("SET");
-    if (setPos == std::string::npos) return;
+    if (setPos == std::string::npos) return query;
 
-    query.tableName = trim(sql.substr(6, setPos - 6));  // 6 = length of "UPDATE"
+    query->tableName = trim(sql.substr(6, setPos - 6));  // 6 = length of "UPDATE"
 
     // Find WHERE if present
     size_t wherePos = upper.find("WHERE");
@@ -696,7 +704,7 @@ void SQLParser::parseUpdate(const std::string& sql, Query& query) {
     std::string setClause;
     if (wherePos != std::string::npos) {
         setClause = sql.substr(setPos + 3, wherePos - setPos - 3);
-        parseWhereClause(sql, upper, query);
+        parseWhereClause(sql, upper, query->where);
     } else {
         setClause = sql.substr(setPos + 3);
     }
@@ -718,9 +726,11 @@ void SQLParser::parseUpdate(const std::string& sql, Query& query) {
             SetClause sc;
             sc.column = trim(assignment.substr(0, eqPos));
             sc.value = parseValue(assignment.substr(eqPos + 1));
-            query.setClauses.push_back(sc);
+            query->setClauses.push_back(sc);
         }
     }
+
+    return query;
 }
 
 } // namespace nanodb

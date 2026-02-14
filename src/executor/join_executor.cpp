@@ -17,7 +17,7 @@ int JoinExecutor::findColumnIndex(const Table& table, const std::string& colName
     return -1;
 }
 
-void JoinExecutor::execute(const Query& query) {
+void JoinExecutor::execute(const SelectQuery& query) {
     // Get left table
     const Table* leftTable = catalog_.getTable(query.tableName);
     if (!leftTable) {

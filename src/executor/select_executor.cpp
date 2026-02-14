@@ -74,7 +74,7 @@ bool SelectExecutor::evaluateWhereClause(const Row& row, const Table& table, con
     return result;
 }
 
-void SelectExecutor::execute(const Query& query) {
+void SelectExecutor::execute(const SelectQuery& query) {
     const Table* table = catalog_.getTable(query.tableName);
     if (!table) {
         std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";

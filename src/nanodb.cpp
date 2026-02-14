@@ -13,31 +13,51 @@ NanoDB::NanoDB()
 {}
 
 void NanoDB::executeSQL(const std::string& sql) {
-    Query query = SQLParser::parse(sql);
-
-    if (query.type == "CREATE") {
-        ddlExecutor_->executeCreateTable(query);
-    } else if (query.type == "DROP") {
-        ddlExecutor_->executeDropTable(query);
-    } else if (query.type == "INSERT") {
-        dmlExecutor_->executeInsert(query);
-    } else if (query.type == "UPDATE") {
-        dmlExecutor_->executeUpdate(query);
-    } else if (query.type == "DELETE") {
-        dmlExecutor_->executeDelete(query);
-    } else if (query.type == "SELECT") {
-        // Route to appropriate SELECT handler
-        if (query.join.hasJoin) {
-            joinExecutor_->execute(query);
-        } else if (query.groupBy.hasGroupBy) {
-            aggregateExecutor_->executeWithGroupBy(query);
-        } else if (!query.aggregates.empty()) {
-            aggregateExecutor_->execute(query);
-        } else {
-            selectExecutor_->execute(query);
-        }
-    } else {
+    auto query = SQLParser::parse(sql);
+    if (!query) {
         std::cout << "Error: Unknown SQL command\n";
+        return;
+    }
+
+    switch (query->type) {
+        case QueryType::CREATE: {
+            auto* q = static_cast<CreateQuery*>(query.get());
+            ddlExecutor_->executeCreateTable(*q);
+            break;
+        }
+        case QueryType::DROP: {
+            auto* q = static_cast<DropQuery*>(query.get());
+            ddlExecutor_->executeDropTable(*q);
+            break;
+        }
+        case QueryType::INSERT: {
+            auto* q = static_cast<InsertQuery*>(query.get());
+            dmlExecutor_->executeInsert(*q);
+            break;
+        }
+        case QueryType::UPDATE: {
+            auto* q = static_cast<UpdateQuery*>(query.get());
+            dmlExecutor_->executeUpdate(*q);
+            break;
+        }
+        case QueryType::DELETE_Q: {
+            auto* q = static_cast<DeleteQuery*>(query.get());
+            dmlExecutor_->executeDelete(*q);
+            break;
+        }
+        case QueryType::SELECT: {
+            auto* q = static_cast<SelectQuery*>(query.get());
+            if (q->join.hasJoin) {
+                joinExecutor_->execute(*q);
+            } else if (q->groupBy.hasGroupBy) {
+                aggregateExecutor_->executeWithGroupBy(*q);
+            } else if (!q->aggregates.empty()) {
+                aggregateExecutor_->execute(*q);
+            } else {
+                selectExecutor_->execute(*q);
+            }
+            break;
+        }
     }
 }
 

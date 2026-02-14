@@ -71,7 +71,7 @@ bool DMLExecutor::evaluateWhereClause(const Row& row, const Table& table, const 
     return result;
 }
 
-void DMLExecutor::executeInsert(const Query& query) {
+void DMLExecutor::executeInsert(const InsertQuery& query) {
     Table* table = catalog_.getTable(query.tableName);
     if (!table) {
         std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";
@@ -117,7 +117,7 @@ void DMLExecutor::executeInsert(const Query& query) {
     std::cout << "1 row inserted.\n";
 }
 
-void DMLExecutor::executeUpdate(const Query& query) {
+void DMLExecutor::executeUpdate(const UpdateQuery& query) {
     Table* table = catalog_.getTable(query.tableName);
     if (!table) {
         std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";
@@ -145,7 +145,7 @@ void DMLExecutor::executeUpdate(const Query& query) {
     std::cout << updateCount << " row(s) updated.\n";
 }
 
-void DMLExecutor::executeDelete(const Query& query) {
+void DMLExecutor::executeDelete(const DeleteQuery& query) {
     Table* table = catalog_.getTable(query.tableName);
     if (!table) {
         std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";

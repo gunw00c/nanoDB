@@ -1,3 +1,4 @@
 .vscode
 /nanodb
 .DS_Store
+/build

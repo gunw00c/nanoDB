@@ -9,8 +9,8 @@ class DDLExecutor {
 public:
     explicit DDLExecutor(Catalog& catalog);
 
-    void executeCreateTable(const Query& query);
-    void executeDropTable(const Query& query);
+    void executeCreateTable(const CreateQuery& query);
+    void executeDropTable(const DropQuery& query);
 
 private:
     Catalog& catalog_;

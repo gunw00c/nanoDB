@@ -10,8 +10,8 @@ class AggregateExecutor {
 public:
     explicit AggregateExecutor(Catalog& catalog);
 
-    void execute(const Query& query);
-    void executeWithGroupBy(const Query& query);
+    void execute(const SelectQuery& query);
+    void executeWithGroupBy(const SelectQuery& query);
 
 private:
     int findColumnIndex(const Table& table, const std::string& colName) const;

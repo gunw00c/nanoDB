@@ -132,7 +132,7 @@ bool AggregateExecutor::evaluateHaving(const HavingClause& having,
     return true;
 }
 
-void AggregateExecutor::execute(const Query& query) {
+void AggregateExecutor::execute(const SelectQuery& query) {
     const Table* table = catalog_.getTable(query.tableName);
     if (!table) {
         std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";
@@ -200,7 +200,7 @@ void AggregateExecutor::execute(const Query& query) {
     std::cout << "1 row(s) returned.\n";
 }
 
-void AggregateExecutor::executeWithGroupBy(const Query& query) {
+void AggregateExecutor::executeWithGroupBy(const SelectQuery& query) {
     const Table* table = catalog_.getTable(query.tableName);
     if (!table) {
         std::cout << "Error: Table '" << query.tableName << "' does not exist.\n";

@@ -121,22 +121,63 @@ namespace nanodb {
         std::vector<Row> rows;
     };
 
+    enum class QueryType {
+        CREATE,
+        DROP,
+        INSERT,
+        UPDATE,
+        DELETE_Q,
+        SELECT
+    };
+
+    // Abstract base query — all query types inherit from this
     struct Query {
-        std::string type;       // "CREATE", "INSERT", "SELECT", "DELETE", "DROP", "UPDATE"
-        std::string tableName;  // Target table name
-        std::vector<Column> columns;              // For CREATE TABLE
-        std::vector<Value> values;                // For INSERT
-        std::vector<std::string> selectColumns;   // For SELECT col1, col2 (empty = *)
-        std::vector<std::string> insertColumns;   // For INSERT INTO table (col1, col2)
-        std::vector<SetClause> setClauses;        // For UPDATE SET
-        WhereClause where;                        // For WHERE clause (supports AND/OR)
-        OrderByClause orderBy;                    // For ORDER BY
-        std::vector<AggregateExpr> aggregates;    // For COUNT, SUM, AVG, MIN, MAX
-        GroupByClause groupBy;                    // For GROUP BY
-        HavingClause having;                      // For HAVING
-        JoinClause join;                          // For JOIN
-        bool distinct = false;                    // For SELECT DISTINCT
-        int limit = -1;                           // For LIMIT (-1 = no limit)
+        QueryType type;
+        std::string tableName;
+        std::shared_ptr<Query> left;    // Left child for tree structure (subqueries, composites)
+        std::shared_ptr<Query> right;   // Right child for tree structure
+
+        explicit Query(QueryType t) : type(t) {}
+        virtual ~Query() = default;
+    };
+
+    struct CreateQuery : public Query {
+        std::vector<Column> columns;
+        CreateQuery() : Query(QueryType::CREATE) {}
+    };
+
+    struct DropQuery : public Query {
+        DropQuery() : Query(QueryType::DROP) {}
+    };
+
+    struct InsertQuery : public Query {
+        std::vector<std::string> insertColumns;
+        std::vector<Value> values;
+        InsertQuery() : Query(QueryType::INSERT) {}
+    };
+
+    struct UpdateQuery : public Query {
+        std::vector<SetClause> setClauses;
+        WhereClause where;
+        UpdateQuery() : Query(QueryType::UPDATE) {}
+    };
+
+    struct DeleteQuery : public Query {
+        WhereClause where;
+        DeleteQuery() : Query(QueryType::DELETE_Q) {}
+    };
+
+    struct SelectQuery : public Query {
+        std::vector<std::string> selectColumns;
+        WhereClause where;
+        OrderByClause orderBy;
+        std::vector<AggregateExpr> aggregates;
+        GroupByClause groupBy;
+        HavingClause having;
+        JoinClause join;
+        bool distinct = false;
+        int limit = -1;
+        SelectQuery() : Query(QueryType::SELECT) {}
     };
 
     // Helper to check if value is NULL
